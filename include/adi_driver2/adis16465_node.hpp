@@ -43,8 +43,6 @@ namespace adi_driver2
 class ImuNode : public rclcpp::Node
 {
 public:
-  Adis16470 imu;
-
   ImuNode();
   ~ImuNode();
 

@@ -264,13 +264,17 @@ int Adis16470::write_register(char address, int16_t data)
  */
 int Adis16470::update_burst(void)
 {
+  constexpr int kBurstTransferSize = 24;
+  constexpr double kGyroScaleRadPerSec = M_PI / 180.0 / 10.0;
+  constexpr double kAcclScaleMps2 = 9.80665 / 4000.0;
+
   unsigned char buff[64] = {0};
   // 0x6800: Burst read function
   buff[0] = 0x61;
   buff[1] = 0x68;
   buff[2] = 0x00;
-  int size = write(fd_, buff, 24);
-  if (size != 24) {
+  int size = write(fd_, buff, kBurstTransferSize);
+  if (size != kBurstTransferSize) {
     perror("update_burst");
     return -1;
   }
@@ -278,8 +282,8 @@ int Adis16470::update_burst(void)
     perror("update_burst");
     return -1;
   }
-  size = read(fd_, buff, 30);
-  if (size != 24) {
+  size = read(fd_, buff, kBurstTransferSize);
+  if (size != kBurstTransferSize) {
     perror("update_burst");
     return -1;
   }
@@ -289,19 +293,19 @@ int Adis16470::update_burst(void)
     return -1;
   }
   // X_GYRO_OUT
-  gyro[0] = big_endian_to_short(&buff[5]) * M_PI / 180 / 10.0;
+  gyro[0] = big_endian_to_short(&buff[5]) * kGyroScaleRadPerSec;
   // Y_GYRO_OUT
-  gyro[1] = big_endian_to_short(&buff[7]) * M_PI / 180 / 10.0;
+  gyro[1] = big_endian_to_short(&buff[7]) * kGyroScaleRadPerSec;
   // Z_GYRO_OUT
-  gyro[2] = big_endian_to_short(&buff[9]) * M_PI / 180 / 10.0;
+  gyro[2] = big_endian_to_short(&buff[9]) * kGyroScaleRadPerSec;
   // X_ACCL_OUT
-  accl[0] = big_endian_to_short(&buff[11]) * M_PI / 180 / 10.0;
+  accl[0] = big_endian_to_short(&buff[11]) * kAcclScaleMps2;
   // Y_ACCL_OUT
-  accl[1] = big_endian_to_short(&buff[13]) * M_PI / 180 / 10.0;
+  accl[1] = big_endian_to_short(&buff[13]) * kAcclScaleMps2;
   // Z_ACCL_OUT
-  accl[2] = big_endian_to_short(&buff[15]) * M_PI / 180 / 10.0;
+  accl[2] = big_endian_to_short(&buff[15]) * kAcclScaleMps2;
   // TEMP_OUT
-  temp = big_endian_to_short(&buff[16]) * 0.1;
+  temp = big_endian_to_short(&buff[17]) * 0.1;
   return 0;
 }
 
@@ -345,11 +349,9 @@ int Adis16470::update(void)
  */
 int Adis16470::set_bias_estimation_time(int16_t tbc)
 {
-  write_register(0x66, tbc);
-  tbc = 0;
-  int16_t dummy = 0;
-  read_register(0x66, dummy);
-  read_register(0x00, tbc);
+  if (write_register(0x66, tbc) < 0) {
+    return -1;
+  }
   return 0;
 }
 
@@ -361,7 +363,5 @@ int Adis16470::set_bias_estimation_time(int16_t tbc)
 int Adis16470::bias_correction_update(void)
 {
   // Bit0: Bias correction update
-  int16_t data = 1;
-  write_register(0x68, data);
-  return 0;
+  return write_register(0x68, 1);
 }

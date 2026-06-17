@@ -93,18 +93,19 @@ bool ImuNode::bias_estimate(
   const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
   const std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
+  (void)request;
   RCLCPP_INFO(this->get_logger(), "bias_estimate");
 
-  if (imu.bias_correction_update() < 0){
+  if (imu_->bias_correction_update() < 0) {
     response->success = false;
     response->message = "Bias correction update failed";
 
     return false;
   }
-    response->success = true;
-    response->message = "Success";
+  response->success = true;
+  response->message = "Success";
 
-    return true;
+  return true;
 }
 
 /**
@@ -126,9 +127,12 @@ void ImuNode::open(void)
   // Wait 10ms for SPI ready
   usleep(10000);
   int16_t pid = 0;
-  imu_->get_product_id(pid);
-  RCLCPP_INFO(this->get_logger(), "Product ID: %x\n", pid);
-  imu_->set_bias_estimation_time(0x070a);
+  if (imu_->get_product_id(pid) == 0) {
+    RCLCPP_INFO(this->get_logger(), "Product ID: %x", pid);
+  }
+  if (imu_->set_bias_estimation_time(0x070a) < 0) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to set bias estimation time");
+  }
 }
 
 void ImuNode::publish_imu_data()
