@@ -4,4 +4,4 @@
     frame_id: "imu"
     burst_mode: true
     publish_temperature: true
-    rate: 100.0
+    rate: 200.0

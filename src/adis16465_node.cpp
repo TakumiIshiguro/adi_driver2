@@ -32,6 +32,8 @@
 
 #include "adi_driver2/adis16465_node.hpp"
 
+#include <cmath>
+#include <stdexcept>
 #include <unistd.h>
 
 using namespace std::chrono_literals;
@@ -48,18 +50,37 @@ ImuNode::ImuNode()
   declare_parameter("frame_id", "imu");
   declare_parameter("burst_mode", true);
   declare_parameter("publish_temperature", true);
-  declare_parameter("rate", 100.0);
+  declare_parameter("rate", 200.0);
 
   device_ = get_parameter("device").as_string();
   frame_id_ = get_parameter("frame_id").as_string();
   burst_mode_ = get_parameter("burst_mode").as_bool();
   publish_temperature_ = get_parameter("publish_temperature").as_bool();
-  int loop_rate = 1000 / get_parameter("rate").get_value<double>();
-  loop_ms_ = std::chrono::milliseconds{loop_rate};
+  rate_ = get_parameter("rate").as_double();
+
+  constexpr double kInternalSampleRateHz = 2000.0;
+  constexpr int64_t kMaxDecimationFactor = 2000;
+  if (!std::isfinite(rate_) || rate_ <= 0.0 || rate_ > kInternalSampleRateHz) {
+    throw std::invalid_argument("rate must be finite and in the range (0, 2000] Hz");
+  }
+
+  const double requested_decimation_factor = kInternalSampleRateHz / rate_;
+  const int64_t decimation_factor = std::llround(requested_decimation_factor);
+  if (decimation_factor < 1 || decimation_factor > kMaxDecimationFactor ||
+    std::abs(requested_decimation_factor - static_cast<double>(decimation_factor)) > 1e-9)
+  {
+    throw std::invalid_argument("rate must be an integer divisor of the ADIS16465 2000 Hz rate");
+  }
+
+  decimation_rate_ = static_cast<int16_t>(decimation_factor - 1);
+  loop_period_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::duration<double>(1.0 / rate_));
 
   RCLCPP_INFO(this->get_logger(), "device: %s", device_.c_str());
   RCLCPP_INFO(this->get_logger(), "frame_id: %s", frame_id_.c_str());
-  RCLCPP_INFO(this->get_logger(), "rate: %f [Hz]", get_parameter("rate").get_value<double>());
+  RCLCPP_INFO(
+    this->get_logger(), "rate: %.3f Hz (DEC_RATE: 0x%04x)",
+    rate_, static_cast<uint16_t>(decimation_rate_));
   RCLCPP_INFO(
     this->get_logger(), "burst_mode: %s",
     (burst_mode_ ? "true" : "false"));
@@ -76,7 +97,8 @@ ImuNode::ImuNode()
   // Bias estimate service
 
   bias_srv_ = this->create_service<std_srvs::srv::Trigger>(
-    "bias_estimate", std::bind(&ImuNode::bias_estimate, this, std::placeholders::_1, std::placeholders::_2));
+    "bias_estimate",
+    std::bind(&ImuNode::bias_estimate, this, std::placeholders::_1, std::placeholders::_2));
 
   while (!is_opened()) {
     RCLCPP_WARN(this->get_logger(), "Keep trying to open the device in 1 second period...");
@@ -133,6 +155,11 @@ void ImuNode::open(void)
   if (imu_->set_bias_estimation_time(0x070a) < 0) {
     RCLCPP_ERROR(this->get_logger(), "Failed to set bias estimation time");
   }
+  if (imu_->set_decimation_rate(decimation_rate_) < 0) {
+    RCLCPP_ERROR(
+      this->get_logger(), "Failed to set DEC_RATE to 0x%04x",
+      static_cast<uint16_t>(decimation_rate_));
+  }
 }
 
 void ImuNode::publish_imu_data()
@@ -176,7 +203,7 @@ void ImuNode::publish_temp_data(void)
 void ImuNode::loop()
 {
   loop_timer_ = create_wall_timer(
-    loop_ms_, [this]() {
+    loop_period_, [this]() {
       if (burst_mode_) {
         if (imu_->update_burst() == 0) {
           publish_imu_data();

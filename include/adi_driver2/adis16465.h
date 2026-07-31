@@ -61,6 +61,7 @@ public:
   int write_register(char address, int16_t data);
   int bias_correction_update(void);
   int set_bias_estimation_time(int16_t tbc);
+  int set_decimation_rate(int16_t decimation_rate);
 };
 
 #endif  // ADI_DRIVER_ADIS16470_H

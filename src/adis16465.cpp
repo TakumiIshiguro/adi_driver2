@@ -356,6 +356,17 @@ int Adis16470::set_bias_estimation_time(int16_t tbc)
 }
 
 /**
+ * @brief Set the sensor output data rate through DEC_RATE
+ * @param decimation_rate DEC_RATE register value (0 to 1999)
+ * @retval 0 Success
+ * @retval -1 Failed
+ */
+int Adis16470::set_decimation_rate(int16_t decimation_rate)
+{
+  return write_register(0x64, decimation_rate);
+}
+
+/**
  * @brief Bias correction update (GLOB_CMD)
  * @retval 0 Success
  * @retval -1 Failed

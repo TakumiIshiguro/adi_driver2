@@ -34,6 +34,8 @@
 #include "std_srvs/srv/trigger.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/temperature.hpp"
+#include <chrono>
+#include <cstdint>
 #include <string>
 
 #include "adi_driver2/adis16465.h"
@@ -73,7 +75,9 @@ public:
   std::string frame_id_;
   bool burst_mode_;
   bool publish_temperature_;
-  std::chrono::milliseconds loop_ms_;
+  double rate_;
+  int16_t decimation_rate_;
+  std::chrono::nanoseconds loop_period_;
 
 };
 } // namespace adi_driver2
