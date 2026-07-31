@@ -17,7 +17,7 @@ def generate_launch_description():
     params_file = os.path.join(adi_driver2_dir, 'config', 'adis16465.param.yaml')
 
     push_ns = PushRosNamespace([LaunchConfiguration('namespace')])
-    
+
     declare_namespace = DeclareLaunchArgument(
         'namespace',
         default_value='imu',
@@ -32,14 +32,14 @@ def generate_launch_description():
 
     imu = GroupAction(
         actions=[
-        push_ns,
-        adis16465,
+            push_ns,
+            adis16465,
         ]
     )
 
     ld = LaunchDescription()
     ld.add_action(declare_namespace)
-    
+
     ld.add_action(imu)
 
     return ld
