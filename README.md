@@ -20,9 +20,9 @@
 | ------------------- | ----------- | ---------------------- | 
 | `device`           | `std::string` | デバイスファイル名           | 
 | `frame_id`          | `std::string` | IMU座標系       | 
-| `burst_mode`         | `std::string` | バーストモードを使用するか         | 
+| `burst_mode`         | `bool` | バーストモードを使用するか         |
 | `publish_temperature`       | `bool`         | 温度のtopicを公開するか   | 
-| `rate`   | `double`      | topicのパブリッシュレート | 
+| `rate`   | `double`      | センサ出力およびtopicのパブリッシュレート（既定値: 200 Hz） |
 
 
 ## Run
