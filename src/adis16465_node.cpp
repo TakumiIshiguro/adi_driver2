@@ -178,10 +178,11 @@ void ImuNode::open(void)
     imu_->closePort();
     return;
   }
-  if (imu_->configure_gyro_scale() < 0) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to determine gyroscope range from RANG_MDL");
-    imu_->closePort();
-    return;
+  const int gyro_scale_result = imu_->configure_gyro_scale();
+  if (gyro_scale_result > 0) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Failed to determine gyroscope range from RANG_MDL; using ADIS16465-2 scale");
   }
   RCLCPP_INFO(
     this->get_logger(), "Gyroscope range: +/- %d deg/s (%.6f deg/s/LSB)",

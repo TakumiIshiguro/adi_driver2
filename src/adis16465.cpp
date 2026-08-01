@@ -149,14 +149,16 @@ int Adis16470::get_product_id(int16_t & pid)
 
 /**
  * @brief Configure gyroscope scaling from the model-specific RANG_MDL register
- * @retval 0 Success
- * @retval -1 Read failure or reserved range identifier
+ * @retval 0 Configured from RANG_MDL
+ * @retval 1 Fell back to the ADIS16465-2 scale
  */
 int Adis16470::configure_gyro_scale()
 {
   int16_t range_model = 0;
   if (read_register_immediate(0x5e, range_model) < 0) {
-    return -1;
+    gyro_range_dps_ = 500;
+    gyro_lsb_per_dps_ = 40.0;
+    return 1;
   }
 
   switch ((static_cast<uint16_t>(range_model) >> 2) & 0x03) {
@@ -174,7 +176,9 @@ int Adis16470::configure_gyro_scale()
       break;
     default:
       fprintf(stderr, "Reserved RANG_MDL value: 0x%04x\n", static_cast<uint16_t>(range_model));
-      return -1;
+      gyro_range_dps_ = 500;
+      gyro_lsb_per_dps_ = 40.0;
+      return 1;
   }
   return 0;
 }
