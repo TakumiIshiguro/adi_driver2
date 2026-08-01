@@ -24,6 +24,8 @@
 | `publish_temperature`       | `bool`         | 温度のtopicを公開するか   | 
 | `rate`   | `double`      | センサ出力およびtopicのパブリッシュレート（既定値: 200 Hz） |
 
+起動時に `RANG_MDL` を読み、ADIS16465-1/-2/-3 のジャイロスケールを自動設定します。
+
 
 ## Run
 

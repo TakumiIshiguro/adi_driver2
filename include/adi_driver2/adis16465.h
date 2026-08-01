@@ -56,6 +56,9 @@ public:
   int openPort(const std::string device);
   void closePort();
   int get_product_id(int16_t & data);
+  int configure_gyro_scale();
+  int gyro_range_dps() const;
+  double gyro_lsb_per_dps() const;
   int update(void);
   int update_burst(void);
   int read_register(unsigned char address, int16_t & data);
@@ -66,7 +69,11 @@ public:
   void set_io_timeout(std::chrono::milliseconds timeout);
 
 private:
-  std::chrono::milliseconds io_timeout_{4};
+  int read_register_immediate(unsigned char address, int16_t & data);
+
+  std::chrono::milliseconds io_timeout_ {4};
+  int gyro_range_dps_ {0};
+  double gyro_lsb_per_dps_ {0.0};
 };
 
 #endif  // ADI_DRIVER_ADIS16470_H

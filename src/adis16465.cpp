@@ -127,10 +127,14 @@ int Adis16470::openPort(const std::string device)
  */
 void Adis16470::closePort()
 {
+  if (fd_ < 0) {
+    return;
+  }
   if (tcsetattr(fd_, TCSANOW, &defaults_) < 0) {
     perror("closePort");
   }
   close(fd_);
+  fd_ = -1;
 }
 
 /**
@@ -140,48 +144,49 @@ void Adis16470::closePort()
  */
 int Adis16470::get_product_id(int16_t & pid)
 {
-  // get product ID
-  unsigned char buff[20];
+  return read_register_immediate(0x72, pid);
+}
 
-  // Sending data
-  buff[0] = 0x61;
-  buff[1] = 0x72;
-  buff[2] = 0x00;
-  int size = write(fd_, buff, 3);
-  if (size != 3) {
-    perror("get_product_id");
+/**
+ * @brief Configure gyroscope scaling from the model-specific RANG_MDL register
+ * @retval 0 Success
+ * @retval -1 Read failure or reserved range identifier
+ */
+int Adis16470::configure_gyro_scale()
+{
+  int16_t range_model = 0;
+  if (read_register_immediate(0x5e, range_model) < 0) {
     return -1;
   }
-  if (tcdrain(fd_) < 0) {
-    perror("get_product_id");
-    return -1;
+
+  switch ((static_cast<uint16_t>(range_model) >> 2) & 0x03) {
+    case 0x00:
+      gyro_range_dps_ = 125;
+      gyro_lsb_per_dps_ = 160.0;
+      break;
+    case 0x01:
+      gyro_range_dps_ = 500;
+      gyro_lsb_per_dps_ = 40.0;
+      break;
+    case 0x03:
+      gyro_range_dps_ = 2000;
+      gyro_lsb_per_dps_ = 10.0;
+      break;
+    default:
+      fprintf(stderr, "Reserved RANG_MDL value: 0x%04x\n", static_cast<uint16_t>(range_model));
+      return -1;
   }
-  size = read(fd_, buff, 3);
-  if (size != 3) {
-    perror("get_product_id");
-    return -1;
-  }
-  // Receiving data
-  buff[0] = 0x61;
-  buff[1] = 0x00;
-  buff[2] = 0x00;
-  size = write(fd_, buff, 3);
-  if (size != 3) {
-    perror("get_product_id");
-    return -1;
-  }
-  if (tcdrain(fd_) < 0) {
-    perror("get_product_id");
-    return -1;
-  }
-  size = read(fd_, buff, 3);
-  if (size != 3) {
-    perror("get_product_id");
-    return -1;
-  }
-  // Convert to short
-  pid = big_endian_to_short(&buff[1]);
   return 0;
+}
+
+int Adis16470::gyro_range_dps() const
+{
+  return gyro_range_dps_;
+}
+
+double Adis16470::gyro_lsb_per_dps() const
+{
+  return gyro_lsb_per_dps_;
 }
 
 /**
@@ -205,13 +210,23 @@ int Adis16470::read_register(unsigned char address, int16_t & data)
     perror("read_register");
     return -1;
   }
-  size = read(fd_, buff, 3);
+  size = adi_driver2::read_exact_with_timeout(fd_, buff, 3, io_timeout_);
   if (size != 3) {
-    perror("read");
+    perror("read_register");
+    return -1;
   }
   data = big_endian_to_short(&buff[1]);
 
   return 0;
+}
+
+int Adis16470::read_register_immediate(unsigned char address, int16_t & data)
+{
+  int16_t previous_data = 0;
+  if (read_register(address, previous_data) < 0) {
+    return -1;
+  }
+  return read_register(0x00, data);
 }
 
 /**
@@ -266,8 +281,13 @@ int Adis16470::write_register(char address, int16_t data)
 int Adis16470::update_burst(void)
 {
   constexpr int kBurstTransferSize = 24;
-  constexpr double kGyroScaleRadPerSec = M_PI / 180.0 / 10.0;
   constexpr double kAcclScaleMps2 = 9.80665 / 4000.0;
+
+  if (gyro_lsb_per_dps_ <= 0.0) {
+    fprintf(stderr, "Gyroscope scale is not configured\n");
+    return -1;
+  }
+  const double gyro_scale_rad_per_sec = M_PI / 180.0 / gyro_lsb_per_dps_;
 
   unsigned char buff[64] = {0};
   // 0x6800: Burst read function
@@ -291,11 +311,11 @@ int Adis16470::update_burst(void)
     return -1;
   }
   // X_GYRO_OUT
-  gyro[0] = big_endian_to_short(&buff[5]) * kGyroScaleRadPerSec;
+  gyro[0] = big_endian_to_short(&buff[5]) * gyro_scale_rad_per_sec;
   // Y_GYRO_OUT
-  gyro[1] = big_endian_to_short(&buff[7]) * kGyroScaleRadPerSec;
+  gyro[1] = big_endian_to_short(&buff[7]) * gyro_scale_rad_per_sec;
   // Z_GYRO_OUT
-  gyro[2] = big_endian_to_short(&buff[9]) * kGyroScaleRadPerSec;
+  gyro[2] = big_endian_to_short(&buff[9]) * gyro_scale_rad_per_sec;
   // X_ACCL_OUT
   accl[0] = big_endian_to_short(&buff[11]) * kAcclScaleMps2;
   // Y_ACCL_OUT
@@ -313,6 +333,11 @@ int Adis16470::update_burst(void)
 int Adis16470::update(void)
 {
   int16_t gyro_out[3], gyro_low[3], accl_out[3], accl_low[3], temp_out;
+
+  if (gyro_lsb_per_dps_ <= 0.0) {
+    fprintf(stderr, "Gyroscope scale is not configured\n");
+    return -1;
+  }
 
   read_register(0x04, gyro_low[0]);
   read_register(0x06, gyro_low[0]);
@@ -334,7 +359,9 @@ int Adis16470::update(void)
 
   // 32bit convert
   for (int i = 0; i < 3; i++) {
-    gyro[i] = ((int32_t(gyro_out[i]) << 16) + int32_t(gyro_low[i])) * M_PI / 180.0 / 2621440.0;
+    const int32_t raw_gyro =
+      static_cast<int32_t>(gyro_out[i]) * 65536 + static_cast<uint16_t>(gyro_low[i]);
+    gyro[i] = raw_gyro * M_PI / 180.0 / (gyro_lsb_per_dps_ * 65536.0);
     accl[i] = ((int32_t(accl_out[i]) << 16) + int32_t(accl_low[i])) * 9.8 / 262144000;
   }
   return 0;

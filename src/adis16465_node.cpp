@@ -173,7 +173,19 @@ void ImuNode::open(void)
   int16_t pid = 0;
   if (imu_->get_product_id(pid) == 0) {
     RCLCPP_INFO(this->get_logger(), "Product ID: %x", pid);
+  } else {
+    RCLCPP_ERROR(this->get_logger(), "Failed to read product ID");
+    imu_->closePort();
+    return;
   }
+  if (imu_->configure_gyro_scale() < 0) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to determine gyroscope range from RANG_MDL");
+    imu_->closePort();
+    return;
+  }
+  RCLCPP_INFO(
+    this->get_logger(), "Gyroscope range: +/- %d deg/s (%.6f deg/s/LSB)",
+    imu_->gyro_range_dps(), 1.0 / imu_->gyro_lsb_per_dps());
   if (imu_->set_bias_estimation_time(0x070a) < 0) {
     RCLCPP_ERROR(this->get_logger(), "Failed to set bias estimation time");
   }
