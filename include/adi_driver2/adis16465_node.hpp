@@ -34,9 +34,12 @@
 #include "std_srvs/srv/trigger.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/temperature.hpp"
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "adi_driver2/adis16465.h"
 
@@ -55,10 +58,11 @@ public:
 
   bool is_opened(void);
   void open(void);
-  void publish_imu_data(void);
-  void publish_temp_data(void);
+  void publish_imu_data(const rclcpp::Time & stamp);
+  void publish_temp_data(const rclcpp::Time & stamp);
 
-  void loop(void);
+  void start_acquisition(void);
+  void acquisition_loop(void);
 
   std::shared_ptr<Adis16470> imu_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_data_pub_;
@@ -66,8 +70,6 @@ public:
   //   ros::ServiceServer bias_srv_;
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bias_srv_;
-
-  rclcpp::TimerBase::SharedPtr loop_timer_;
 
   rclcpp::Clock system_clock_;
 
@@ -77,7 +79,15 @@ public:
   bool publish_temperature_;
   double rate_;
   int16_t decimation_rate_;
+  int io_timeout_ms_;
   std::chrono::nanoseconds loop_period_;
+  std::atomic<bool> acquisition_running_{false};
+  std::thread acquisition_thread_;
+  std::mutex imu_mutex_;
+  uint64_t io_error_count_{0};
+  uint64_t deadline_miss_count_{0};
+  uint64_t gap_count_{0};
+  double max_gap_ms_{0.0};
 
 };
 } // namespace adi_driver2

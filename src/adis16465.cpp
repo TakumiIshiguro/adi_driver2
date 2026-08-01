@@ -40,6 +40,7 @@
 #include <stdint.h>
 #include <string>
 #include "adi_driver2/adis16465.h"
+#include "adi_driver2/serial_io.hpp"
 
 /**
  * @brief change big endian 2 byte into short
@@ -278,13 +279,10 @@ int Adis16470::update_burst(void)
     perror("update_burst");
     return -1;
   }
-  if (tcdrain(fd_) < 0) {
-    perror("update_burst");
-    return -1;
-  }
-  size = read(fd_, buff, kBurstTransferSize);
+  size = adi_driver2::read_exact_with_timeout(fd_, buff, kBurstTransferSize, io_timeout_);
   if (size != kBurstTransferSize) {
     perror("update_burst");
+    tcflush(fd_, TCIFLUSH);
     return -1;
   }
   int16_t diag_stat = big_endian_to_short(&buff[3]);
@@ -364,6 +362,11 @@ int Adis16470::set_bias_estimation_time(int16_t tbc)
 int Adis16470::set_decimation_rate(int16_t decimation_rate)
 {
   return write_register(0x64, decimation_rate);
+}
+
+void Adis16470::set_io_timeout(std::chrono::milliseconds timeout)
+{
+  io_timeout_ = timeout;
 }
 
 /**

@@ -5,3 +5,4 @@
     burst_mode: true
     publish_temperature: true
     rate: 200.0
+    io_timeout_ms: 4

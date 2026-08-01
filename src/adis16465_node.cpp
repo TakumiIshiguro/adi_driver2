@@ -32,6 +32,7 @@
 
 #include "adi_driver2/adis16465_node.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <unistd.h>
@@ -51,12 +52,14 @@ ImuNode::ImuNode()
   declare_parameter("burst_mode", true);
   declare_parameter("publish_temperature", true);
   declare_parameter("rate", 200.0);
+  declare_parameter("io_timeout_ms", 4);
 
   device_ = get_parameter("device").as_string();
   frame_id_ = get_parameter("frame_id").as_string();
   burst_mode_ = get_parameter("burst_mode").as_bool();
   publish_temperature_ = get_parameter("publish_temperature").as_bool();
   rate_ = get_parameter("rate").as_double();
+  io_timeout_ms_ = get_parameter("io_timeout_ms").as_int();
 
   constexpr double kInternalSampleRateHz = 2000.0;
   constexpr int64_t kMaxDecimationFactor = 2000;
@@ -75,6 +78,10 @@ ImuNode::ImuNode()
   decimation_rate_ = static_cast<int16_t>(decimation_factor - 1);
   loop_period_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
     std::chrono::duration<double>(1.0 / rate_));
+  if (io_timeout_ms_ < 1 || io_timeout_ms_ > 100) {
+    throw std::invalid_argument("io_timeout_ms must be in the range [1, 100]");
+  }
+  imu_->set_io_timeout(std::chrono::milliseconds(io_timeout_ms_));
 
   RCLCPP_INFO(this->get_logger(), "device: %s", device_.c_str());
   RCLCPP_INFO(this->get_logger(), "frame_id: %s", frame_id_.c_str());
@@ -87,6 +94,7 @@ ImuNode::ImuNode()
   RCLCPP_INFO(
     this->get_logger(), "publish_temperature: %s",
     (publish_temperature_ ? "true" : "false"));
+  RCLCPP_INFO(this->get_logger(), "io_timeout_ms: %d", io_timeout_ms_);
 
   // Data publisher
   imu_data_pub_ = create_publisher<sensor_msgs::msg::Imu>("data_raw", 100);
@@ -106,10 +114,23 @@ ImuNode::ImuNode()
     open();
   }
 
-  loop();
+  start_acquisition();
 }
 
-ImuNode::~ImuNode() {imu_->closePort();}
+ImuNode::~ImuNode()
+{
+  acquisition_running_ = false;
+  if (acquisition_thread_.joinable()) {
+    acquisition_thread_.join();
+  }
+  RCLCPP_INFO(
+    this->get_logger(),
+    "IMU acquisition summary: io_errors=%llu deadline_misses=%llu gaps=%llu max_gap=%.3f ms",
+    static_cast<unsigned long long>(io_error_count_),
+    static_cast<unsigned long long>(deadline_miss_count_),
+    static_cast<unsigned long long>(gap_count_), max_gap_ms_);
+  imu_->closePort();
+}
 
 bool ImuNode::bias_estimate(
   const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
@@ -118,6 +139,7 @@ bool ImuNode::bias_estimate(
   (void)request;
   RCLCPP_INFO(this->get_logger(), "bias_estimate");
 
+  const std::lock_guard<std::mutex> lock(imu_mutex_);
   if (imu_->bias_correction_update() < 0) {
     response->success = false;
     response->message = "Bias correction update failed";
@@ -162,11 +184,11 @@ void ImuNode::open(void)
   }
 }
 
-void ImuNode::publish_imu_data()
+void ImuNode::publish_imu_data(const rclcpp::Time & stamp)
 {
   sensor_msgs::msg::Imu data;
   data.header.frame_id = frame_id_;
-  data.header.stamp = system_clock_.now();
+  data.header.stamp = stamp;
 
   // Linear acceleration
   data.linear_acceleration.x = imu_->accl[0];
@@ -187,11 +209,11 @@ void ImuNode::publish_imu_data()
   imu_data_pub_->publish(data);
 }
 
-void ImuNode::publish_temp_data(void)
+void ImuNode::publish_temp_data(const rclcpp::Time & stamp)
 {
   sensor_msgs::msg::Temperature data;
   data.header.frame_id = frame_id_;
-  data.header.stamp = system_clock_.now();
+  data.header.stamp = stamp;
 
   // imu Temperature
   data.temperature = imu_->temp;
@@ -200,38 +222,71 @@ void ImuNode::publish_temp_data(void)
   temp_data_pub_->publish(data);
 }
 
-void ImuNode::loop()
+void ImuNode::start_acquisition()
 {
-  loop_timer_ = create_wall_timer(
-    loop_period_, [this]() {
-      if (burst_mode_) {
-        if (imu_->update_burst() == 0) {
-          publish_imu_data();
-        } else {
-          RCLCPP_ERROR(this->get_logger(), "Cannot update burst");
-        }
-      } else if (publish_temperature_) {
-        if (imu_->update() == 0) {
-          publish_imu_data();
-          publish_temp_data();
-        } else {
-          RCLCPP_ERROR(this->get_logger(), "Cannot update");
-        }
-      } else if (burst_mode_ && publish_temperature_) {
-        if (imu_->update_burst() == 0) {
-          publish_imu_data();
-          publish_temp_data();
-        } else {
-          RCLCPP_ERROR(this->get_logger(), "Cannot update burst");
-        }
-      } else {
-        if (imu_->update() == 0) {
-          publish_imu_data();
-        } else {
-          RCLCPP_ERROR(this->get_logger(), "Cannot update");
+  acquisition_running_ = true;
+  acquisition_thread_ = std::thread(&ImuNode::acquisition_loop, this);
+}
+
+void ImuNode::acquisition_loop()
+{
+  using SteadyClock = std::chrono::steady_clock;
+  auto next_sample_time = SteadyClock::now();
+  auto last_publish_time = SteadyClock::time_point{};
+
+  while (acquisition_running_ && rclcpp::ok()) {
+    std::this_thread::sleep_until(next_sample_time);
+    if (!acquisition_running_ || !rclcpp::ok()) {
+      break;
+    }
+
+    int update_result = -1;
+    {
+      const std::lock_guard<std::mutex> lock(imu_mutex_);
+      update_result = burst_mode_ ? imu_->update_burst() : imu_->update();
+    }
+
+    const auto publish_time = SteadyClock::now();
+    if (update_result == 0) {
+      const rclcpp::Time stamp = system_clock_.now();
+      publish_imu_data(stamp);
+      if (!burst_mode_ && publish_temperature_) {
+        publish_temp_data(stamp);
+      }
+
+      if (last_publish_time != SteadyClock::time_point{}) {
+        const double gap_ms = std::chrono::duration<double, std::milli>(
+          publish_time - last_publish_time).count();
+        if (gap_ms > 1.5 * std::chrono::duration<double, std::milli>(loop_period_).count()) {
+          ++gap_count_;
+          max_gap_ms_ = std::max(max_gap_ms_, gap_ms);
+          RCLCPP_WARN_THROTTLE(
+            this->get_logger(), system_clock_, 5000,
+            "IMU publish gap %.3f ms (gaps=%llu, io_errors=%llu, deadline_misses=%llu)",
+            gap_ms, static_cast<unsigned long long>(gap_count_),
+            static_cast<unsigned long long>(io_error_count_),
+            static_cast<unsigned long long>(deadline_miss_count_));
         }
       }
-    });
+      last_publish_time = publish_time;
+    } else {
+      ++io_error_count_;
+      RCLCPP_ERROR_THROTTLE(
+        this->get_logger(), system_clock_, 5000,
+        "Cannot read IMU (io_errors=%llu)",
+        static_cast<unsigned long long>(io_error_count_));
+    }
+
+    next_sample_time += loop_period_;
+    const auto now = SteadyClock::now();
+    if (now >= next_sample_time) {
+      const auto overdue = now - next_sample_time;
+      const uint64_t missed =
+        static_cast<uint64_t>(overdue / loop_period_) + 1;
+      deadline_miss_count_ += missed;
+      next_sample_time += loop_period_ * missed;
+    }
+  }
 }
 } // namespace adi_driver2
 

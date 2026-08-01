@@ -34,6 +34,7 @@
 #define ADI_DRIVER_ADIS16470_H
 
 #include <termios.h>
+#include <chrono>
 #include <string>
 
 class Adis16470
@@ -62,6 +63,10 @@ public:
   int bias_correction_update(void);
   int set_bias_estimation_time(int16_t tbc);
   int set_decimation_rate(int16_t decimation_rate);
+  void set_io_timeout(std::chrono::milliseconds timeout);
+
+private:
+  std::chrono::milliseconds io_timeout_{4};
 };
 
 #endif  // ADI_DRIVER_ADIS16470_H
